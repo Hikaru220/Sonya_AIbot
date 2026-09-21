@@ -3,10 +3,12 @@
 import logging
 import os
 import subprocess
+from pathlib import Path
 
 import requests
 
 from sona.config.app_aliases import DEFAULT_ALIASES_FILE, load_app_aliases
+from sona.files.file_manager import FileManager, PathBlockedError
 
 logger = logging.getLogger("sona.executor")
 
@@ -36,6 +38,7 @@ class ActionExecutor:
         executor_config = config.get("executor") or {}
         aliases_file = executor_config.get("aliases_file", DEFAULT_ALIASES_FILE)
         self.apps = self._load_apps(aliases_file)
+        self.files = FileManager(config)
 
     def _load_apps(self, aliases_file: str) -> dict[str, str]:
         """Строит словарь app_key -> путь к исполняемому файлу из общего загрузчика алиасов."""
@@ -59,6 +62,16 @@ class ActionExecutor:
                 return self._get_weather(intent)
             if action == "web_search":
                 return self._web_search(intent)
+            if action == "find_file":
+                return self._find_file(intent)
+            if action == "read_file":
+                return self._read_file(intent)
+            if action == "open_file":
+                return self._open_file(intent)
+            if action == "create_file":
+                return self._create_file(intent)
+            if action == "create_folder":
+                return self._create_folder(intent)
             if action == "answer_question":
                 # Gemini уже сформулировал ответ (математика, факты и т.п.) — просто озвучиваем
                 return intent.get("reply") or "Да, хозяин, не поняла вопрос"
@@ -182,3 +195,101 @@ class ActionExecutor:
         except requests.RequestException as exc:
             logger.error("Ошибка запроса к Tavily для %r: %s", query, exc)
             return "Да, хозяин, не получилось поискать в интернете — проблема с сетью"
+
+    def _resolve_create_path(self, intent: dict) -> Path | None:
+        """target для create_file/create_folder — путь ОТНОСИТЕЛЬНО домашней папки
+        пользователя (например "Desktop/todo.txt"). Не даём уйти за её пределы через "..",
+        даже если Gemini вдруг предложит такой путь."""
+        target = intent.get("target")
+        if not target:
+            return None
+        home = Path.home().resolve()
+        candidate = (home / target).resolve()
+        if candidate != home and home not in candidate.parents:
+            logger.warning("Попытка создать путь за пределами домашней папки: %r", target)
+            return None
+        return candidate
+
+    def _find_file(self, intent: dict) -> str:
+        query = intent.get("target")
+        if not query:
+            return "Да, хозяин, не поняла что искать"
+
+        matches = self.files.find_files(query)
+        if not matches:
+            return f"Да, хозяин, не нашла файлов с {query} в названии"
+        if len(matches) == 1:
+            return f"Да, хозяин, нашла: {matches[0]}"
+        listed = "; ".join(str(m) for m in matches[:3])
+        return f"Да, хозяин, нашла несколько файлов: {listed}"
+
+    def _read_file(self, intent: dict) -> str:
+        query = intent.get("target")
+        if not query:
+            return "Да, хозяин, не поняла какой файл прочитать"
+
+        matches = self.files.find_files(query)
+        if not matches:
+            return f"Да, хозяин, не нашла файлов с {query} в названии"
+
+        try:
+            content = self.files.read_text(matches[0])
+        except PathBlockedError:
+            return "Да, хозяин, этот файл мне трогать нельзя"
+        except Exception as exc:
+            logger.error("Не удалось прочитать %s: %s", matches[0], exc)
+            return "Да, хозяин, не получилось прочитать этот файл"
+
+        if not content.strip():
+            return f"Да, хозяин, файл {matches[0].name} пустой"
+        return f"Да, хозяин, вот что в файле {matches[0].name}: {content}"
+
+    def _open_file(self, intent: dict) -> str:
+        query = intent.get("target")
+        if not query:
+            return "Да, хозяин, не поняла какой файл открыть"
+
+        matches = self.files.find_files(query)
+        if not matches:
+            return f"Да, хозяин, не нашла файлов с {query} в названии"
+
+        try:
+            self.files.open_file(matches[0])
+        except PathBlockedError:
+            return "Да, хозяин, этот файл мне трогать нельзя"
+        except OSError as exc:
+            logger.error("Не удалось открыть %s: %s", matches[0], exc)
+            return f"Да, хозяин, не получилось открыть {matches[0].name}"
+
+        return f"Да, хозяин, открываю {matches[0].name}"
+
+    def _create_file(self, intent: dict) -> str:
+        path = self._resolve_create_path(intent)
+        if path is None:
+            return "Да, хозяин, не поняла где и что создать"
+
+        content = intent.get("content") or ""
+        try:
+            self.files.create_file(path, content)
+        except PathBlockedError:
+            return "Да, хозяин, туда мне создавать файлы нельзя"
+        except OSError as exc:
+            logger.error("Не удалось создать файл %s: %s", path, exc)
+            return "Да, хозяин, не получилось создать файл"
+
+        return f"Да, хозяин, создала файл {path.name}"
+
+    def _create_folder(self, intent: dict) -> str:
+        path = self._resolve_create_path(intent)
+        if path is None:
+            return "Да, хозяин, не поняла где создать папку"
+
+        try:
+            self.files.create_folder(path)
+        except PathBlockedError:
+            return "Да, хозяин, там мне создавать папки нельзя"
+        except OSError as exc:
+            logger.error("Не удалось создать папку %s: %s", path, exc)
+            return "Да, хозяин, не получилось создать папку"
+
+        return f"Да, хозяин, создала папку {path.name}"
