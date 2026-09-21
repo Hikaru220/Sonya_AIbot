@@ -11,7 +11,7 @@ logger = logging.getLogger("sona.stt")
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 0.15  # длительность одного блока записи, используемого для анализа тишины
 SILENCE_RMS_THRESHOLD = 500  # порог амплитуды (RMS по int16-семплам) — ниже считается тишиной
-SILENCE_HOLD_SECONDS = 1.2  # сколько тишины подряд ждём после начала речи перед остановкой
+SILENCE_HOLD_SECONDS = 0.6  # сколько тишины подряд ждём после начала речи перед остановкой
 
 _BEEP_FREQ_HZ = 880
 _BEEP_DURATION_SECONDS = 0.15

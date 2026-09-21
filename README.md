@@ -16,13 +16,23 @@ Python 3.11+, Vosk, faster-whisper, Gemini API, Silero TTS, pynvml/psutil.
 
 ## Быстрый старт
 
+Зависимости (особенно torch с CUDA) занимают несколько гигабайт — если на диске C
+мало места, создавай venv на другом диске:
+
 ```bash
-python -m venv venv
-venv\Scripts\activate
+python -m venv D:\sona-venv
+D:\sona-venv\Scripts\activate
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126  # CUDA-сборка под видеокарту
 pip install -r requirements.txt
 copy .env.example .env   # заполнить GEMINI_API_KEY (и остальные ключи по желанию)
 python main.py
 ```
+
+Если у torch.hub/pip резолвер зависимостей зависает при установке CUDA-версии — добавь
+флаг `--use-deprecated=legacy-resolver`, он работает надёжнее для тяжёлых пакетов вроде
+torch. Версию `cu126` в URL подбирай под то, что реально доступно (`pip index versions
+torch --index-url https://download.pytorch.org/whl/cuXXX`) — не под каждый Python сборки
+есть сразу для всех версий CUDA.
 
 Голосовой триггер "Соня" требует модель Vosk — без неё работает ручной запуск по Enter
 в консоли. Скачивается напрямую, без регистрации (~45 МБ):
