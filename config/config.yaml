@@ -10,6 +10,7 @@ stt:
 tts:
   speaker: "baya"            # голос Silero по умолчанию (ru v3)
   sample_rate: 48000
+  volume: 0.6                 # 0..1, громкость воспроизведения ответа
 
 resource_monitor:
   gpu_load_threshold_percent: 75

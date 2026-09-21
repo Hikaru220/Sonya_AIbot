@@ -13,6 +13,7 @@ class Speaker:
         self.resource_monitor = resource_monitor
         self._speaker_name = config["tts"]["speaker"]
         self._sample_rate = config["tts"]["sample_rate"]
+        self._volume = float(config["tts"].get("volume", 0.6))
         self._models = {}  # кэш загруженных моделей Silero по устройству: {"cuda": ..., "cpu": ...}
 
     def _get_model(self, device: str):
@@ -25,6 +26,8 @@ class Speaker:
                 "silero_tts",
                 language="ru",
                 speaker="v3_1_ru",
+                trust_repo=True,  # иначе torch.hub спрашивает подтверждение через input(),
+                                  # что падает с EOFError без интерактивного stdin
             )
             model.to(device)
             self._models[device] = model
@@ -47,7 +50,7 @@ class Speaker:
             # TODO (v0.2, см. TOR.md): прогнать audio через RVC-конвертацию поверх Silero
             # для более милого, человечного тембра. В v0.1 не реализуется — вне scope этого модуля.
 
-            sounddevice.play(audio.numpy(), samplerate=self._sample_rate)
+            sounddevice.play(audio.numpy() * self._volume, samplerate=self._sample_rate)
             sounddevice.wait()
         except Exception:
             logger.exception("Не удалось синтезировать или воспроизвести речь: %r", text)

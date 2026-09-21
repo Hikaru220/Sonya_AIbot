@@ -13,6 +13,26 @@ CHUNK_SECONDS = 0.15  # длительность одного блока зап�
 SILENCE_RMS_THRESHOLD = 500  # порог амплитуды (RMS по int16-семплам) — ниже считается тишиной
 SILENCE_HOLD_SECONDS = 1.2  # сколько тишины подряд ждём после начала речи перед остановкой
 
+_BEEP_FREQ_HZ = 880
+_BEEP_DURATION_SECONDS = 0.15
+_BEEP_SAMPLE_RATE = 22050
+
+
+def _play_beep() -> None:
+    """Короткий сигнал сразу перед началом записи команды — иначе пользователь не знает,
+    в какой момент уже можно говорить, и начало фразы обрезается."""
+    try:
+        t = np.linspace(0, _BEEP_DURATION_SECONDS,
+                         int(_BEEP_SAMPLE_RATE * _BEEP_DURATION_SECONDS), endpoint=False)
+        tone = 0.3 * np.sin(2 * np.pi * _BEEP_FREQ_HZ * t)
+        fade = max(1, int(_BEEP_SAMPLE_RATE * 0.02))  # плавные края, чтобы не было щелчка
+        tone[:fade] *= np.linspace(0, 1, fade)
+        tone[-fade:] *= np.linspace(1, 0, fade)
+        sd.play(tone.astype(np.float32), samplerate=_BEEP_SAMPLE_RATE)
+        sd.wait()
+    except Exception:
+        logger.exception("Не удалось воспроизвести сигнал начала записи")
+
 
 class Transcriber:
     def __init__(self, config: dict, resource_monitor):
@@ -51,6 +71,8 @@ class Transcriber:
         chunks: list[np.ndarray] = []
         speech_detected = False
         silence_run = 0
+
+        _play_beep()
 
         # Примечание: тишина определяется простым порогом по амплитуде (RMS int16) — этого
         # достаточно для v0.1. Полноценный VAD (например, webrtcvad или silero-vad) точнее

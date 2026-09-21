@@ -3,6 +3,7 @@ faster-whisper
 google-genai
 torch
 torchaudio
+omegaconf
 sounddevice
 numpy
 pynvml
