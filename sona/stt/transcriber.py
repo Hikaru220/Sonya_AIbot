@@ -51,12 +51,14 @@ class Transcriber:
     def _get_model(self, device: str) -> WhisperModel:
         model = self._models.get(device)
         if model is None:
-            compute_type = "float16" if device == "cuda" else "int8"
+            # "auto" вместо жёстко заданного float16/int8: старые GPU (например, GTX 1050 Ti,
+            # архитектура Pascal) не поддерживают эффективный float16, и CTranslate2 в таком
+            # случае падает с ValueError — пусть сам подбирает поддерживаемый тип под железо.
             logger.info(
-                "Загружаю модель faster-whisper '%s' на устройстве %s (compute_type=%s)",
-                self.model_size, device, compute_type,
+                "Загружаю модель faster-whisper '%s' на устройстве %s (compute_type=auto)",
+                self.model_size, device,
             )
-            model = WhisperModel(self.model_size, device=device, compute_type=compute_type)
+            model = WhisperModel(self.model_size, device=device, compute_type="auto")
             self._models[device] = model
         return model
 
