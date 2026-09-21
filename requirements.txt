@@ -9,3 +9,4 @@ pynvml
 psutil
 pyyaml
 python-dotenv
+requests

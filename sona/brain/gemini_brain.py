@@ -1,0 +1,134 @@
+"""Интеграция с Gemini API: разбор голосовой команды в структурированный intent."""
+
+import json
+import logging
+import os
+
+from google import genai
+from google.genai import types
+
+from sona.config.app_aliases import DEFAULT_ALIASES_FILE, load_app_aliases
+
+logger = logging.getLogger("sona.brain")
+
+# Быстрая и дешёвая модель, её достаточно для разбора intent'ов. Менять только здесь,
+# если понадобится более умная модель — остальная логика на имя не завязана.
+MODEL_NAME = "gemini-2.0-flash"
+
+# Отдаётся, если Gemini недоступен, ответил не-JSON'ом или произошла любая другая ошибка.
+FALLBACK_INTENT = {
+    "action": "unknown",
+    "target": None,
+    "reply": "Да, хозяин, прости, что-то пошло не так",
+}
+
+_SYSTEM_PROMPT_TEMPLATE = """\
+Ты — «Соня», милый и дружелюбный голосовой ассистент, который живёт на компьютере хозяина \
+и помогает управлять им голосом, а также отвечает на любые вопросы, используя свои знания.
+
+Тебе присылают текст голосовой команды пользователя (уже распознанный из речи, поэтому в \
+нём возможны мелкие ошибки распознавания). Твоя задача — понять намерение пользователя и \
+ответить СТРОГО одним JSON-объектом, без markdown-разметки (без ```), без пояснений до или \
+после — только сам JSON, в точности такой формы:
+
+{"action": "launch_app" | "get_weather" | "answer_question" | "web_search" | "unknown", "target": "<строка или null>", "reply": "<реплика в характере>"}
+
+Виды action и когда их использовать:
+- "launch_app" — пользователь просит запустить/открыть/включить одну из известных программ \
+из списка ниже. target = соответствующий ключ программы (именно ключ из списка, а не алиас). \
+Сопоставляй запрос с алиасами гибко: падежи, сокращения, опечатки распознавания речи, \
+разговорные варианты — даже без дословного совпадения.
+- "get_weather" — пользователь спрашивает про погоду в каком-либо городе. target = название \
+этого города, ОБЯЗАТЕЛЬНО транслитерированное на английский/латиницей (например, "Bishkek", \
+а не "Бишкек") — это нужно для поиска города во внешнем сервисе погоды. reply в этом случае \
+можно оставить короткой ("Да, хозяин, сейчас узнаю") — финальный ответ с цифрами соберёт \
+отдельный модуль.
+- "answer_question" — вопрос или просьба, на которую ты можешь уверенно ответить из своих \
+знаний и которая не зависит от текущей даты: математика, факты, объяснения, советы, \
+перевод, шутки, общие знания и т.д. target = null, а reply = развёрнутый, но произносимый \
+вслух ответ по существу вопроса.
+- "web_search" — вопрос про что-то актуальное/меняющееся, чего ты можешь не знать или \
+знать устаревшим: свежие новости, курсы валют, счёт матча, погода в новостях, "что \
+произошло сегодня", цены, текущие события и т.п. target = короткий поисковый запрос \
+(на русском или английском — как лучше для поиска), reply можно оставить короткой \
+("Да, хозяин, сейчас поищу") — финальный ответ соберёт отдельный модуль из результатов \
+поиска.
+- "unknown" — только если это не вопрос, а просьба сделать что-то, что тебе физически \
+недоступно (действие в реальном мире, доступ к системе, которого у тебя нет), или ты \
+совсем не поняла, что хочет пользователь. target = null.
+
+Если не уверена, актуальны ли нужны сведения — выбирай "web_search", а не рискуй ответить \
+устаревшими данными.
+
+Правила для reply:
+- Всегда на русском языке, в характере милой и дружелюбной Сони, обращение к \
+пользователю — "хозяин".
+- Reply ВСЕГДА должен начинаться ровно с фразы "Да, хозяин, " (с запятой и пробелом), \
+дальше — сам ответ/реплика с маленькой буквы. Например: "Да, хозяин, будет 20 градусов" \
+или "Да, хозяин, дважды два четыре".
+- Никогда не добавляй ничего, кроме самого JSON-объекта: ни текста до, ни текста после, \
+ни markdown-код-блоков, ни комментариев.
+
+Известные программы (ключ — алиасы через запятую):
+KNOWN_APPS_BLOCK
+"""
+
+
+class GeminiBrain:
+    def __init__(self, config: dict):
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Не найден GEMINI_API_KEY в переменных окружения. Добавь ключ в .env "
+                "(см. .env.example) перед запуском."
+            )
+        self._client = genai.Client(api_key=api_key)
+
+        aliases_path = config.get("executor", {}).get("aliases_file", DEFAULT_ALIASES_FILE)
+        known_apps = {
+            key: info.get("aliases", [])
+            for key, info in load_app_aliases(aliases_path).items()
+        }
+        self._system_prompt = self._build_system_prompt(known_apps)
+
+    @staticmethod
+    def _build_system_prompt(known_apps: dict) -> str:
+        if known_apps:
+            apps_block = "\n".join(
+                f"- {key}: {', '.join(aliases) if aliases else '(алиасы не заданы)'}"
+                for key, aliases in known_apps.items()
+            )
+        else:
+            apps_block = "(пока не добавлено ни одной программы)"
+        return _SYSTEM_PROMPT_TEMPLATE.replace("KNOWN_APPS_BLOCK", apps_block)
+
+    def parse_command(self, text: str) -> dict:
+        """Отправляет текст команды в Gemini, возвращает intent-словарь.
+
+        Никогда не бросает исключения наружу: при любой ошибке (сеть, квота API,
+        невалидный JSON в ответе и т.п.) отдаёт безопасный fallback-intent.
+        """
+        try:
+            # NOTE: kwarg `config`, класс `types.GenerateContentConfig` и поле
+            # `response_mime_type` соответствуют SDK google-genai на момент написания —
+            # при обновлении пакета стоит свериться с актуальной сигнатурой
+            # client.models.generate_content().
+            response = self._client.models.generate_content(
+                model=MODEL_NAME,
+                contents=text,
+                config=types.GenerateContentConfig(
+                    system_instruction=self._system_prompt,
+                    response_mime_type="application/json",
+                ),
+            )
+            intent = json.loads(response.text)
+            if not isinstance(intent, dict) or "action" not in intent:
+                raise ValueError(f"неожиданный формат ответа Gemini: {intent!r}")
+
+            intent.setdefault("target", None)
+            intent.setdefault("reply", "")
+            return intent
+
+        except Exception:
+            logger.exception("Не удалось разобрать команду через Gemini: %r", text)
+            return dict(FALLBACK_INTENT)

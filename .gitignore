@@ -32,5 +32,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Claude Code session/tooling state (not project data)
+.claude/
+
 # Local config overrides
 config/local.yaml
