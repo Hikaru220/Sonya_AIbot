@@ -1,0 +1,23 @@
+# Основной конфиг ассистента "Соня"
+
+wake_word:
+  keyword: "sona"          # имя wake-word модели (openWakeWord)
+  threshold: 0.5
+
+stt:
+  model_size: "small"       # small | medium | large-v3
+  language: "ru"
+
+tts:
+  speaker: "baya"            # голос Silero по умолчанию (ru v3)
+  sample_rate: 48000
+
+resource_monitor:
+  gpu_load_threshold_percent: 75
+  poll_interval_seconds: 2
+
+power:
+  idle_timeout_seconds: 900  # 15 минут
+
+executor:
+  aliases_file: "config/app_aliases.yaml"

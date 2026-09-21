@@ -1,0 +1,11 @@
+openwakeword
+faster-whisper
+google-genai
+torch
+torchaudio
+sounddevice
+numpy
+pynvml
+psutil
+pyyaml
+python-dotenv
