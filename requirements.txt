@@ -1,4 +1,4 @@
-openwakeword
+pvporcupine
 faster-whisper
 google-genai
 torch

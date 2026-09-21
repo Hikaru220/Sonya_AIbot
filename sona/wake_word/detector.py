@@ -1,95 +1,95 @@
-"""Детектор кодового слова: слушает микрофон и блокирует поток до срабатывания триггера."""
+"""Детектор кодового слова: слушает микрофон и блокирует поток до срабатывания триггера.
+
+Движок — Picovoice Porcupine: модели (.ppn) генерируются мгновенно на
+console.picovoice.ai по тексту фразы, без обучения и без GPU. Бесплатно для
+личного некоммерческого использования.
+"""
 
 import logging
+import os
+import struct
 from pathlib import Path
 
 logger = logging.getLogger("sona.wake_word")
 
-_SAMPLE_RATE = 16000
-_CHUNK_SAMPLES = 1280  # 80 мс при 16 kHz — размер чанка, который ожидает openWakeWord
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MODEL_DIR = _PROJECT_ROOT / "models" / "wakeword"
-_MODEL_EXTENSIONS = (".onnx", ".tflite")
 
 
 class WakeWordDetector:
     def __init__(self, config: dict):
         ww_config = config.get("wake_word", {}) if config else {}
-        self.keyword = ww_config.get("keyword", "sona")
-        self.threshold = float(ww_config.get("threshold", 0.5))
+        self.keywords = ww_config.get("keywords", ["sonya", "sonechka"])
+        self.sensitivity = float(ww_config.get("sensitivity", 0.5))
 
-        self._model_path = self._find_model_path()
-        self._loaded_model = None  # кэш openWakeWord Model, чтобы не грузить с диска на каждый цикл
-        if self._model_path is None:
-            # TODO: обучить или скачать кастомную модель openWakeWord под слово "Соня" —
-            # готовой предобученной модели для этого слова не существует, это отдельная
-            # задача. Файл нужно положить в models/wakeword/{keyword}.onnx (или .tflite),
-            # после чего заглушка ниже перестанет использоваться автоматически.
+        self._access_key = os.environ.get("PICOVOICE_ACCESS_KEY")
+        self._keyword_paths = self._find_keyword_paths()
+        self._porcupine = None  # кэш инстанса Porcupine, конструктор дорогой
+
+        if not self._keyword_paths or not self._access_key:
+            # TODO: создать .ppn-файлы на console.picovoice.ai (платформа Windows) для
+            # каждого слова из self.keywords, положить в models/wakeword/{keyword}.ppn,
+            # и добавить PICOVOICE_ACCESS_KEY в .env (ключ там же, в консоли).
             logger.warning(
-                "Модель wake-word не найдена: ожидался файл '%s' или '%s'. "
-                "Пока использую временную заглушку — нажатие Enter в консоли будет "
-                "имитировать срабатывание триггер-слова, чтобы можно было тестировать "
-                "остальной пайплайн без обученной модели.",
-                _MODEL_DIR / f"{self.keyword}.onnx",
-                _MODEL_DIR / f"{self.keyword}.tflite",
+                "Модели Porcupine (.ppn) в '%s' или PICOVOICE_ACCESS_KEY в .env не "
+                "найдены. Пока использую временную заглушку — нажатие Enter в консоли "
+                "будет имитировать срабатывание триггер-слова.",
+                _MODEL_DIR,
             )
 
-    def _find_model_path(self) -> Path | None:
-        """Ищет файл модели models/wakeword/{keyword}.onnx или .tflite."""
-        for ext in _MODEL_EXTENSIONS:
-            candidate = _MODEL_DIR / f"{self.keyword}{ext}"
+    def _find_keyword_paths(self) -> list[str]:
+        """Ищет models/wakeword/{keyword}.ppn для каждого слова; пропускает отсутствующие."""
+        paths = []
+        for keyword in self.keywords:
+            candidate = _MODEL_DIR / f"{keyword}.ppn"
             if candidate.is_file():
-                return candidate
-        return None
+                paths.append(str(candidate))
+            else:
+                logger.warning("Не найден файл модели Porcupine для %r: %s", keyword, candidate)
+        return paths
 
     def listen_for_wake_word(self) -> None:
         """Блокирует вызывающий поток, пока не будет обнаружено триггер-слово."""
-        if self._model_path is None:
+        if not self._keyword_paths or not self._access_key:
             self._listen_fallback_manual()
         else:
-            self._listen_openwakeword()
+            self._listen_porcupine()
 
     def _listen_fallback_manual(self) -> None:
-        """Заглушка на время отсутствия обученной модели: Enter в консоли = триггер-слово."""
+        """Заглушка на время отсутствия ключа/моделей: Enter в консоли = триггер-слово."""
         logger.info("Жду триггер-слово (заглушка: нажмите Enter в консоли)...")
         input()
         logger.info("Триггер-слово 'обнаружено' (ручной ввод через Enter)")
 
-    def _get_model(self):
-        """Лениво загружает и кэширует Model — конструктор дорогой (диск + инициализация
-        ONNX-рантайма), а слушаем мы в цикле на каждый wake word, поэтому грузим один раз."""
-        if self._loaded_model is None:
-            from openwakeword.model import Model
-            self._loaded_model = Model(wakeword_models=[str(self._model_path)])
-        return self._loaded_model
+    def _get_porcupine(self):
+        if self._porcupine is None:
+            import pvporcupine
+            sensitivities = [self.sensitivity] * len(self._keyword_paths)
+            self._porcupine = pvporcupine.create(
+                access_key=self._access_key,
+                keyword_paths=self._keyword_paths,
+                sensitivities=sensitivities,
+            )
+        return self._porcupine
 
-    def _listen_openwakeword(self) -> None:
-        """Слушает микрофон через sounddevice и прогоняет чанки аудио через openWakeWord."""
+    def _listen_porcupine(self) -> None:
+        """Слушает микрофон через sounddevice и прогоняет кадры через Porcupine."""
         import sounddevice as sd
 
-        model = self._get_model()
+        porcupine = self._get_porcupine()
 
-        logger.info(
-            "Жду триггер-слово '%s' (модель: %s, порог: %.2f)...",
-            self.keyword, self._model_path.name, self.threshold,
-        )
+        logger.info("Жду триггер-слово (%s)...", ", ".join(self.keywords))
 
-        with sd.InputStream(
-            samplerate=_SAMPLE_RATE,
+        with sd.RawInputStream(
+            samplerate=porcupine.sample_rate,
             channels=1,
             dtype="int16",
-            blocksize=_CHUNK_SAMPLES,
+            blocksize=porcupine.frame_length,
         ) as stream:
             while True:
-                audio_chunk, _overflowed = stream.read(_CHUNK_SAMPLES)
-                predictions = model.predict(audio_chunk.flatten())
-
-                triggered = [
-                    (name, score) for name, score in predictions.items()
-                    if score >= self.threshold
-                ]
-                if triggered:
-                    name, score = max(triggered, key=lambda item: item[1])
-                    logger.info("Триггер-слово обнаружено: %s (score=%.2f)", name, score)
+                data, _overflowed = stream.read(porcupine.frame_length)
+                pcm = struct.unpack_from("h" * porcupine.frame_length, data)
+                keyword_index = porcupine.process(pcm)
+                if keyword_index >= 0:
+                    logger.info("Триггер-слово обнаружено: %s", self.keywords[keyword_index])
                     return

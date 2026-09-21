@@ -12,7 +12,7 @@
 
 ## Стек
 
-Python 3.11+, openWakeWord, faster-whisper, Gemini API, Silero TTS, pynvml/psutil.
+Python 3.11+, Porcupine (Picovoice), faster-whisper, Gemini API, Silero TTS, pynvml/psutil.
 
 ## Быстрый старт
 
@@ -20,9 +20,16 @@ Python 3.11+, openWakeWord, faster-whisper, Gemini API, Silero TTS, pynvml/psuti
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env   # заполнить GEMINI_API_KEY
+copy .env.example .env   # заполнить GEMINI_API_KEY (и остальные ключи по желанию)
 python main.py
 ```
+
+Голосовой триггер "Соня" требует файлов моделей Porcupine — без них работает ручной
+запуск по Enter в консоли. Чтобы включить голосовой триггер:
+1. Зарегистрируйся на [console.picovoice.ai](https://console.picovoice.ai) (бесплатно).
+2. Создай там слова "sonya" и "sonechka" (язык English, платформа Windows), скачай
+   `.ppn`-файлы и положи их в `models/wakeword/sonya.ppn` и `models/wakeword/sonechka.ppn`.
+3. Впиши свой AccessKey из консоли в `.env` как `PICOVOICE_ACCESS_KEY`.
 
 ## Структура проекта
 
