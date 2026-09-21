@@ -3,8 +3,10 @@
 import json
 import logging
 import os
+import time
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from sona.config.app_aliases import DEFAULT_ALIASES_FILE, load_app_aliases
@@ -22,6 +24,11 @@ FALLBACK_INTENT = {
     "target": None,
     "reply": "Да, хозяин, прости, что-то пошло не так",
 }
+
+# Сколько раз повторить запрос при временной перегрузке сервера (503) и пауза между
+# попытками — такие сбои в норме проходят за секунды, одна лишняя попытка часто спасает.
+_SERVER_ERROR_RETRIES = 2
+_SERVER_ERROR_RETRY_DELAY_SECONDS = 2.0
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 Ты — «Соня», милый и дружелюбный голосовой ассистент, который живёт на компьютере хозяина \
@@ -127,29 +134,46 @@ class GeminiBrain:
         """Отправляет текст команды в Gemini, возвращает intent-словарь.
 
         Никогда не бросает исключения наружу: при любой ошибке (сеть, квота API,
-        невалидный JSON в ответе и т.п.) отдаёт безопасный fallback-intent.
+        невалидный JSON в ответе и т.п.) отдаёт безопасный fallback-intent. Временная
+        перегрузка сервера (503) отдельно повторяется несколько раз с паузой, прежде
+        чем сдаться — остальные ошибки сразу уходят в fallback без повторов.
         """
-        try:
-            # NOTE: kwarg `config`, класс `types.GenerateContentConfig` и поле
-            # `response_mime_type` соответствуют SDK google-genai на момент написания —
-            # при обновлении пакета стоит свериться с актуальной сигнатурой
-            # client.models.generate_content().
-            response = self._client.models.generate_content(
-                model=MODEL_NAME,
-                contents=text,
-                config=types.GenerateContentConfig(
-                    system_instruction=self._system_prompt,
-                    response_mime_type="application/json",
-                ),
-            )
-            intent = json.loads(response.text)
-            if not isinstance(intent, dict) or "action" not in intent:
-                raise ValueError(f"неожиданный формат ответа Gemini: {intent!r}")
+        attempts = _SERVER_ERROR_RETRIES + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                # NOTE: kwarg `config`, класс `types.GenerateContentConfig` и поле
+                # `response_mime_type` соответствуют SDK google-genai на момент написания —
+                # при обновлении пакета стоит свериться с актуальной сигнатурой
+                # client.models.generate_content().
+                response = self._client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=text,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._system_prompt,
+                        response_mime_type="application/json",
+                    ),
+                )
+                intent = json.loads(response.text)
+                if not isinstance(intent, dict) or "action" not in intent:
+                    raise ValueError(f"неожиданный формат ответа Gemini: {intent!r}")
 
-            intent.setdefault("target", None)
-            intent.setdefault("reply", "")
-            return intent
+                intent.setdefault("target", None)
+                intent.setdefault("reply", "")
+                return intent
 
-        except Exception:
-            logger.exception("Не удалось разобрать команду через Gemini: %r", text)
-            return dict(FALLBACK_INTENT)
+            except genai_errors.ServerError:
+                if attempt < attempts:
+                    logger.warning(
+                        "Gemini временно недоступен (попытка %s/%s), повтор через %.0fс",
+                        attempt, attempts, _SERVER_ERROR_RETRY_DELAY_SECONDS,
+                    )
+                    time.sleep(_SERVER_ERROR_RETRY_DELAY_SECONDS)
+                    continue
+                logger.exception("Gemini недоступен после %s попыток: %r", attempts, text)
+                return dict(FALLBACK_INTENT)
+
+            except Exception:
+                logger.exception("Не удалось разобрать команду через Gemini: %r", text)
+                return dict(FALLBACK_INTENT)
+
+        return dict(FALLBACK_INTENT)  # недостижимо, но чётко закрывает контроль типов
