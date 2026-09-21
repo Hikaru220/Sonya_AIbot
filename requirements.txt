@@ -1,4 +1,4 @@
-pvporcupine
+vosk
 faster-whisper
 google-genai
 torch

@@ -1,8 +1,7 @@
 # Основной конфиг ассистента "Соня"
 
 wake_word:
-  keywords: ["sonya", "sonechka"]  # имена файлов models/wakeword/{keyword}.ppn (Porcupine)
-  sensitivity: 0.5                  # 0..1, выше — чувствительнее, но больше ложных срабатываний
+  keywords: ["соня", "сонечка"]  # слова-триггеры, ищутся в распознанном Vosk тексте
 
 stt:
   model_size: "small"       # small | medium | large-v3

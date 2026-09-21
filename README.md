@@ -12,7 +12,7 @@
 
 ## Стек
 
-Python 3.11+, Porcupine (Picovoice), faster-whisper, Gemini API, Silero TTS, pynvml/psutil.
+Python 3.11+, Vosk, faster-whisper, Gemini API, Silero TTS, pynvml/psutil.
 
 ## Быстрый старт
 
@@ -24,12 +24,13 @@ copy .env.example .env   # заполнить GEMINI_API_KEY (и остальн�
 python main.py
 ```
 
-Голосовой триггер "Соня" требует файлов моделей Porcupine — без них работает ручной
-запуск по Enter в консоли. Чтобы включить голосовой триггер:
-1. Зарегистрируйся на [console.picovoice.ai](https://console.picovoice.ai) (бесплатно).
-2. Создай там слова "sonya" и "sonechka" (язык English, платформа Windows), скачай
-   `.ppn`-файлы и положи их в `models/wakeword/sonya.ppn` и `models/wakeword/sonechka.ppn`.
-3. Впиши свой AccessKey из консоли в `.env` как `PICOVOICE_ACCESS_KEY`.
+Голосовой триггер "Соня" требует модель Vosk — без неё работает ручной запуск по Enter
+в консоли. Скачивается напрямую, без регистрации (~45 МБ):
+
+```bash
+curl -L -o models/vosk/vosk-model-small-ru.zip https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
+cd models/vosk && unzip vosk-model-small-ru.zip && mv vosk-model-small-ru-0.22 model && rm vosk-model-small-ru.zip
+```
 
 ## Структура проекта
 
